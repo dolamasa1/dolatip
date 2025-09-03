@@ -1,126 +1,69 @@
-\# Dolatip
+# Dolatip
 
+A custom **animated tooltip** for Java Swing.
+It provides a modern look with fade-in/out animations, expandable transaction history, and smooth resizing.
 
+## ✨ Features
 
-A custom \*\*animated tooltip\*\* for Java Swing.  
+* 🪄 Fade-in / fade-out animations
+* 📈 Trend indicators (▲ ▼ ●) for numeric values
+* 📜 Expandable view when data exceeds a threshold
+* 🎨 Customizable styles via `Config` (colors, width, font, etc.)
+* 🖼 Rounded corners & shadow effect
 
-It provides a modern look with fade-in/out animations, expandable transaction history, and smooth resizing.  
+## 📸 Demo
 
-
-
-\## ✨ Features
-
-\- 🪄 Fade-in / fade-out animations  
-
-\- 📈 Trend indicators (▲ ▼ ●) for numeric values  
-
-\- 📜 Expandable view when data exceeds a threshold  
-
-\- 🎨 Customizable styles via `Config` (colors, width, font, etc.)  
-
-\- 🖼 Rounded corners \& shadow effect  
-
-
-
-\## 📸 Demo
-
-
-
-Light usage:
-
-!\[Dolatip small](demo-small.gif)
-
-
+Collapsed:
+![Dolatip small](demo/demo-small.gif)
 
 Expanded:
+![Dolatip expanded](demo/demo-expanded.gif)
 
-!\[Dolatip expanded](demo-expanded.gif)
-
-
-
-\*(Replace with your actual GIF filenames in the repo)\*  
-
-
-
-\## ⚡ Usage
-
-
+## ⚡ Usage
 
 ```java
-
-import javax.swing.\*;
-
+import javax.swing.*;
 import java.util.Arrays;
 
-
-
 public class Main {
+    public static void main(String[] args) {
+        JFrame frame = new JFrame("Dolatip Demo");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        JButton button = new JButton("Hover me!");
+        frame.add(button);
+        frame.setSize(300, 200);
+        frame.setVisible(true);
 
-&nbsp;   public static void main(String\[] args) {
+        Dolatip.Config config = new Dolatip.Config("Transactions")
+                .width(200)
+                .maxBeforeClick(3)
+                .maxAfterClick(8);
 
-&nbsp;       JFrame frame = new JFrame("Dolatip Demo");
-
-&nbsp;       frame.setDefaultCloseOperation(JFrame.EXIT\_ON\_CLOSE);
-
-&nbsp;       JButton button = new JButton("Hover me!");
-
-&nbsp;       frame.add(button);
-
-&nbsp;       frame.setSize(300, 200);
-
-&nbsp;       frame.setVisible(true);
-
-
-
-&nbsp;       Dolatip.Config config = new Dolatip.Config("Transactions")
-
-&nbsp;               .width(200)
-
-&nbsp;               .maxBeforeClick(3)
-
-&nbsp;               .maxAfterClick(8);
-
-
-
-&nbsp;       Dolatip.attachTo(button, Arrays.asList(10.0, 12.5, 11.8, 14.3), config);
-
-&nbsp;   }
-
+        Dolatip.attachTo(button, Arrays.asList(10.0, 12.5, 11.8, 14.3), config);
+    }
 }
+```
 
-⚙️ Config Options
+## ⚙️ Config Options
 
-Option	Description	Default
+| Option            | Description                                | Default   |
+| ----------------- | ------------------------------------------ | --------- |
+| `backgroundColor` | Tooltip background color                   | Dark gray |
+| `width(int)`      | Tooltip width in px                        | 160       |
+| `maxBeforeClick`  | Items shown before click (collapsed view)  | 2         |
+| `maxAfterClick`   | Items shown after click (expanded view)    | 6         |
+| `cornerRadius`    | Rounded corner radius                      | 8         |
+| `offset(x, y)`    | Tooltip offset from parent component       | (5,0)     |
+| `transparency`    | Background transparency percentage (0–100) | 0         |
 
-backgroundColor	Tooltip background color	Dark gray
+## 📦 Installation
 
-width(int)	Tooltip width in px	160
+Just copy `Dolatip.java` into your project under a suitable package, e.g.:
 
-maxBeforeClick	Items shown before click (collapsed view)	2
-
-maxAfterClick	Items shown after click (expanded view)	6
-
-cornerRadius	Rounded corner radius	8
-
-offset(x, y)	Tooltip offset from parent component	(5,0)
-
-transparency	Background transparency percentage (0–100)	0
-
-
-
-📦 Installation
-
-Just copy Dolatip.java into your project under a suitable package, e.g.:
-
-
-
-css
-
-Copy code
-
+```
 src/Main/themes/Dolatip.java
+```
 
-📝 License
+## 📝 License
 
 MIT License – feel free to use and modify.
-
