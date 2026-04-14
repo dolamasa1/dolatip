@@ -1,29 +1,66 @@
-
-package main.dolatip;
-
+package UI.components.Assets.tooltips.dolatip;
 
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
-import java.text.NumberFormat;
 import java.util.List;
 import javax.swing.*;
 import javax.swing.Timer;
 
+/**
+ * Singleton floating tooltip that renders a two-section card:
+ *
+ * <pre>
+ * ┌─────────────────────────┐
+ * │ Title                   │  ← header (always visible)
+ * ├─────────────────────────┤
+ * │ ● Label         Value   │  ┐
+ * │ ▼ Label         Value   │  ┘  upper section (always visible)
+ * ├ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤  ← separator (click to expand/collapse)
+ * │ ● Label       Value     │  ┐
+ * │ ● Label       Value     │  ┘  lower section (smaller font, toggled)
+ * └─────────────────────────┘
+ * </pre>
+ *
+ * <h3>Typical usage</h3>
+ * <pre>
+ * // Build payload
+ * DolatipPayload payload = DolatipPayload.builder()
+ *     .usage(DolatipUsage.FINANCIAL)
+ *     .upper(
+ *         DolatipEntry.ofTrend("Close",  142.50, 139.00),
+ *         DolatipEntry.ofTrend("Volume", 8_420,  7_900)
+ *     )
+ *     .lower(
+ *         DolatipEntry.ofTrend("Open",  140.10, 141.20),
+ *         DolatipEntry.ofTrend("High",  144.80, 143.50),
+ *         DolatipEntry.ofTrend("Low",   139.30, 138.00)
+ *     )
+ *     .build();
+ *
+ * // Attach to any Swing component
+ * Dolatip.attachTo(myLabel, payload, DolatipUsage.FINANCIAL.toConfig("Price History"));
+ * </pre>
+ *
+ * <h3>Legacy usage (List&lt;Double&gt;)</h3>
+ * <pre>
+ * Dolatip.attachTo(component, myDoubleList, config);
+ * </pre>
+ */
 public class Dolatip {
-    private static final NumberFormat NF = NumberFormat.getInstance();
-    private static final int DEFAULT_ANIMATION_DURATION = 300;
-    
+
+    // ── Singleton ─────────────────────────────────────────────────────────────
+
+    private static Dolatip sharedInstance;
+
     private final JWindow window;
-    private final Config config;
-    private Timer animationTimer;
-    private float currentOpacity;
-    private List<Double> currentData;
-    private boolean isExpanded = false;
-    private Component parentComponent;
+    private Config        config;
+    private Timer         animationTimer;
+    private float         currentOpacity;
+    private DolatipPayload currentPayload;
+    private boolean       isExpanded = false;
+    private Component     parentComponent;
 
     private Dolatip(Config config) {
         this.config = config;
@@ -31,397 +68,430 @@ public class Dolatip {
         initializeWindow();
     }
 
-private void initializeWindow() {
-    window.setBackground(new Color(0, 0, 0, 0));
-    window.setFocusableWindowState(false);
-    window.setAlwaysOnTop(true);
-    
-    // Add type hint for Java 7+ compatibility
-    window.setType(Window.Type.POPUP);
-}
-
-private void positionWindow() {
-    Point parentLocation = parentComponent.getLocationOnScreen();
-    int x = parentLocation.x + parentComponent.getWidth() + config.offsetX;
-    int y = parentLocation.y + config.offsetY;
-    
-    // Ensure tooltip stays within screen bounds
-    Rectangle screenBounds = window.getGraphicsConfiguration().getBounds();
-    int maxX = screenBounds.x + screenBounds.width - window.getWidth();
-    int maxY = screenBounds.y + screenBounds.height - window.getHeight();
-    
-    window.setLocation(
-        Math.min(x, maxX),
-        Math.min(y, maxY)
-    );
-}
-
-
-
-// In the Dolatip class, update the attachTo method
-public static void attachTo(JComponent component, List<Double> data, Config config) {
-    // Remove existing DolatipMouseAdapter listeners
-    MouseListener[] listeners = component.getMouseListeners();
-    for (MouseListener listener : listeners) {
-        if (listener instanceof DolatipMouseAdapter) {
-            component.removeMouseListener(listener);
+    public static synchronized Dolatip getInstance(Config config) {
+        if (sharedInstance == null) {
+            sharedInstance = new Dolatip(config);
+        } else {
+            sharedInstance.config = config;
         }
-    }
-    Dolatip tooltip = new Dolatip(config);
-    component.addMouseListener(new DolatipMouseAdapter(tooltip, data));
-}
-
-public void toggleExpanded() {
-        if (currentData.size() > config.maxBeforeClick) {
-            isExpanded = !isExpanded;
-            updateContent();
-            window.pack();
-            animateWindowResize(window.getSize(), window.getPreferredSize());
-            positionWindow();
-        }
+        return sharedInstance;
     }
 
-// Ensure the window is reinitialized if needed when shown again
-public void show(Component parent, List<Double> data) {
-    if (data == null || data.isEmpty()) return;
-    
-    this.currentData = data;
-    this.parentComponent = parent;
-    
-    SwingUtilities.invokeLater(() -> {
-        if (window == null || !window.isDisplayable()) {
-            initializeWindow(); // Reinitialize if window was disposed
+    // ── Window setup ──────────────────────────────────────────────────────────
+
+    private void initializeWindow() {
+        window.setBackground(new Color(0, 0, 0, 0));
+        window.setFocusableWindowState(false);
+        window.setAlwaysOnTop(true);
+        window.setType(Window.Type.POPUP);
+    }
+
+    private void positionWindow() {
+        if (parentComponent == null || !parentComponent.isShowing()) return;
+        Point parentLoc = parentComponent.getLocationOnScreen();
+        int x = parentLoc.x + parentComponent.getWidth() + config.offsetX;
+        int y = parentLoc.y + config.offsetY;
+
+        Rectangle screen = window.getGraphicsConfiguration().getBounds();
+        int maxX = screen.x + screen.width  - window.getWidth();
+        int maxY = screen.y + screen.height - window.getHeight();
+
+        window.setLocation(
+                Math.max(screen.x, Math.min(x, maxX)),
+                Math.max(screen.y, Math.min(y, maxY))
+        );
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /**
+     * Attaches Dolatip to a component using a {@link DolatipPayload}.
+     * Any previously registered Dolatip listener is replaced.
+     */
+    public static void attachTo(JComponent component, DolatipPayload payload, Config config) {
+        removeExistingListeners(component);
+        component.addMouseListener(new DolatipMouseAdapter(payload, config));
+    }
+
+    /**
+     * Legacy overload — accepts the original {@code List<Double>} and converts
+     * it to a payload automatically.
+     */
+    public static void attachTo(JComponent component, List<Double> data, Config config) {
+        attachTo(component, DolatipPayload.fromTrends(data, config.maxBeforeClick), config);
+    }
+
+    /** Programmatically show the tooltip anchored to the given component. */
+    public void show(Component parent, DolatipPayload payload) {
+        if (payload == null || payload.isEmpty()) return;
+        this.currentPayload = payload;
+        this.parentComponent = parent;
+        this.isExpanded = false;
+
+        // Sync config width with usage when the payload carries a usage
+        if (payload.usage != DolatipUsage.DEFAULT
+                && config.width == Config.DEFAULT_WIDTH) {
+            config.width = payload.usage.defaultWidth;
         }
+
+        if (!window.isDisplayable()) initializeWindow();
         updateContent();
         positionWindow();
         startShowAnimation();
-    });
-}
+    }
 
     public void hide() {
         startHideAnimation();
     }
-    private void updateContent() {
-        JLabel content = new JLabel(createHTMLContent()) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2d = (Graphics2D) g.create();
-                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                
-                // Shadow effect
-                g2d.setColor(new Color(0, 0, 0, 50));
-                g2d.fillRoundRect(1, 1, getWidth(), getHeight(), config.cornerRadius, config.cornerRadius);
-                
-                // Main background
-                g2d.setColor(config.backgroundColor);
-                g2d.fillRoundRect(0, 0, getWidth(), getHeight(), config.cornerRadius, config.cornerRadius);
-                
-                super.paintComponent(g2d);
-                g2d.dispose();
-            }
-        };
-        
-// Modify the mouseClicked handler in updateContent()
-content.addMouseListener(new MouseAdapter() {
-    @Override
-    public void mouseEntered(MouseEvent e) {
-        window.setOpacity(1f); // Changed tooltipWindow to window
-    }
 
-    @Override
-    public void mouseExited(MouseEvent e) {
-        startHideAnimation();
-    }
-    
-    @Override
-    public void mouseClicked(MouseEvent e) {
-        if (currentData.size() > config.maxBeforeClick) {
+    /** Toggles the lower section visibility (click handler on the card). */
+    public void toggleExpanded() {
+        if (currentPayload != null && currentPayload.hasLower()) {
             Dimension oldSize = window.getSize();
             isExpanded = !isExpanded;
             updateContent();
             window.pack();
-            Dimension newSize = window.getSize();
-            animateWindowResize(oldSize, newSize);
+            animateWindowResize(oldSize, window.getSize());
             positionWindow();
         }
     }
-});
-        
+
+    // ── Content rendering ─────────────────────────────────────────────────────
+
+    private void updateContent() {
+        JLabel content = new JLabel(buildHTML()) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
+
+                // Shadow
+                g2.setColor(new Color(0, 0, 0, 55));
+                g2.fillRoundRect(2, 2, getWidth() - 2, getHeight() - 2,
+                        config.cornerRadius, config.cornerRadius);
+
+                // Background (UIManager key overrides config for theme integration)
+                Color bg = uiColor("Dolatip.background", resolvedBg());
+                g2.setColor(bg);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(),
+                        config.cornerRadius, config.cornerRadius);
+
+                super.paintComponent(g2);
+                g2.dispose();
+            }
+        };
+
+        content.addMouseListener(new ContentMouseAdapter(this));
         content.setOpaque(false);
-        content.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
+        content.setBorder(BorderFactory.createEmptyBorder(8, 12, 10, 12));
         window.setContentPane(content);
         window.pack();
     }
 
-    private String createHTMLContent() {
-        int count = isExpanded ? 
-            Math.min(config.maxAfterClick, currentData.size()) : 
-            Math.min(config.maxBeforeClick, currentData.size());
-        
-        StringBuilder html = new StringBuilder("<html><body style='width:")
-            .append(config.width).append("px;margin:0;padding:0;'>");
+    /**
+     * Builds the full HTML string for the JLabel.
+     *
+     * Layout (table-based for reliable Swing HTML rendering):
+     * <pre>
+     *  header bar
+     *  ── upper rows (dot · label · value) ──
+     *  ── separator (if lower non-empty and expanded) ──
+     *  ── lower rows (smaller font) ──
+     *  ── expand hint (if lower non-empty and collapsed) ──
+     * </pre>
+     */
+    private String buildHTML() {
+        DolatipUsage usage   = currentPayload.usage;
+        Color headerBg       = uiColor("Dolatip.headerBackground", resolvedHeaderBg());
+        Color headerFg       = uiColor("Dolatip.foreground",       resolvedHeaderFg());
+        Color primaryFg      = uiColor("Dolatip.foreground",       usage.primaryTextColor);
+        Color secondaryFg    = uiColor("Dolatip.secondaryForeground", usage.secondaryTextColor);
+        Color lowerFg        = usage.lowerTextColor;
+        Color sepColor       = usage.separatorColor();
 
-        // Header with original gradient
-        html.append("<div style='"
-            + "background: linear-gradient(to right, #2b2b2b, #404040);"
-            + "color: #fff;"
-            + "padding: 6px;"
-            + "margin: -8px -8px 8px -8px;"
-            + "border-radius: 4px 4px 0 0;"
-            + "font-weight: 500;"
-            + "'>").append(config.title).append("</div>");
+        int w          = config.width;
+        int bodySize   = usage.bodyFontSize;
+        int smallSize  = usage.smallFontSize;
 
-        if (!currentData.isEmpty()) {
-            html.append("<div style='"
-                + "display: flex;"
-                + "flex-direction: column;"
-                + "gap: 4px;"
-                + "max-height: 200px;"
-                + "overflow-y: auto;"
-                + "'>");
+        StringBuilder h = new StringBuilder();
+        h.append("<html><body style='width:").append(w).append("px; margin:0; padding:0;'>");
 
-            double previous = !currentData.isEmpty() ? currentData.get(0) : 0;
-            for (int i = 0; i < count; i++) {
-                double current = currentData.get(i);
-                String trendIcon;
-                String trendColor;
-                String bgColor = (i % 2 == 0) ? "rgba(255,255,255,0.05)" : "transparent";
+        // ── Header ────────────────────────────────────────────────────────────
+        h.append("<div style='background:").append(hex(headerBg))
+         .append("; color:").append(hex(headerFg))
+         .append("; padding:6px 8px; margin:-8px -12px 8px -12px;")
+         .append(" border-radius:").append(config.cornerRadius - 2).append("px ")
+         .append(config.cornerRadius - 2).append("px 0 0;")
+         .append(" font-weight:bold; font-size:").append(bodySize).append("px;'>")
+         .append(config.title)
+         .append("</div>");
 
-                if (current > previous) {
-                    trendIcon = "▲";
-                    trendColor = "#4CAF50";
-                } else if (current < previous) {
-                    trendIcon = "▼";
-                    trendColor = "#F44336";
-                } else {
-                    trendIcon = "●";
-                    trendColor = "#9E9E9E";
-                }
-
-                html.append(String.format("<div style='"
-                    + "display: flex;"
-                    + "justify-content: space-between;"
-                    + "align-items: center;"
-                    + "padding: 4px 8px;"
-                    + "background: %s;"
-                    + "border-radius: 3px;"
-                    + "'>"
-                    + "<span style='color: %s; font-size: 12px;'>%s</span>"
-                    + "<span style='color: %s; font-weight: 500;'>%s</span>"
-                    + "</div>",
-                    bgColor,
-                    trendColor, trendIcon,
-                    (i == 0) ? "#FFF" : "#BDBDBD",
-                    NF.format(current)
-                ));
-
-                previous = current;
+        // ── Upper section ─────────────────────────────────────────────────────
+        List<DolatipEntry> upperList = currentPayload.upper;
+        if (!upperList.isEmpty()) {
+            h.append("<table width='").append(w).append("' cellpadding='2' cellspacing='0' border='0'>");
+            for (int i = 0; i < upperList.size(); i++) {
+                DolatipEntry e  = upperList.get(i);
+                Color rowColor  = e.rowColor != null ? e.rowColor
+                                : i == 0 ? primaryFg : secondaryFg;
+                appendRow(h, e, rowColor, bodySize, /* bold first */ i == 0);
             }
-
-            html.append("</div>");
-            
-            // Original footer style
-            html.append("<div style='"
-                + "margin-top: 8px;"
-                + "padding-top: 8px;"
-                + "border-top: 1px solid rgba(255,255,255,0.1);"
-                + "color: #9E9E9E;"
-                + "font-size: 0.9em;"
-                + "'>")
-                .append("Last ").append(count).append(" transactions")
-                .append("</div>");
-        } else {
-            html.append("<div style='color: #9E9E9E; text-align: center; padding: 12px 0;'>")
-                .append("No transaction history")
-                .append("</div>");
+            h.append("</table>");
         }
 
-        return html.append("</body></html>").toString();
-    }
-   private Point calculateTargetPosition() {
-        Point location = parentComponent.getLocationOnScreen();
-        return new Point(
-            location.x + parentComponent.getWidth() + config.offsetX,
-            location.y + config.offsetY
-        );
-    }
+        // ── Lower section (expanded) ──────────────────────────────────────────
+        if (currentPayload.hasLower() && isExpanded) {
+            // Separator
+            h.append("<hr noshade size='1' color='").append(hex(sepColor))
+             .append("' style='margin:5px 0;'/>");
 
-   // Add these new methods to the Dolatip class
-private void animateWindowResize(Dimension from, Dimension to) {
-    final int duration = 300; // Animation duration in ms
-    final long startTime = System.currentTimeMillis();
-    final Dimension startSize = new Dimension(from);
-    final Dimension targetSize = new Dimension(to);
-    final Point startPos = window.getLocation();
-    final Point targetPos = calculateTargetPosition();
-
-    new Timer(16, new ActionListener() { // ~60 FPS
-        public void actionPerformed(ActionEvent e) {
-            float progress = (System.currentTimeMillis() - startTime) / (float)duration;
-            progress = Math.min(progress, 1.0f);
-            
-            // Cubic easing function
-            float easedProgress = (float) (Math.cos((progress + 1) * Math.PI) / 2.0f) + 0.5f;
-            
-            // Animate size
-            int currentWidth = (int) (startSize.width + 
-                (targetSize.width - startSize.width) * easedProgress);
-            int currentHeight = (int) (startSize.height + 
-                (targetSize.height - startSize.height) * easedProgress);
-            window.setSize(currentWidth, currentHeight);
-            
-            // Animate position
-            int newX = (int) (startPos.x + (targetPos.x - startPos.x) * easedProgress);
-            int newY = (int) (startPos.y + (targetPos.y - startPos.y) * easedProgress);
-            window.setLocation(newX, newY);
-
-            if (progress >= 1.0f) {
-                ((Timer)e.getSource()).stop();
-                window.setSize(targetSize);
-                window.setLocation(targetPos);
+            h.append("<table width='").append(w).append("' cellpadding='1' cellspacing='0' border='0'>");
+            for (DolatipEntry e : currentPayload.lower) {
+                Color rowColor = e.rowColor != null ? e.rowColor : lowerFg;
+                appendRow(h, e, rowColor, smallSize, false);
             }
+            h.append("</table>");
         }
-    }).start();
-}
 
-    private String getTrendIcon(int index) {
-        if (index >= currentData.size() - 1) return "●";
-        double current = currentData.get(index);
-        double previous = currentData.get(index + 1);
-        
-        if (current > previous) return "▲";
-        if (current < previous) return "▼";
-        return "●";
-    }
-
-
-
-private void startShowAnimation() {
-    if (animationTimer != null && animationTimer.isRunning()) return;
-    
-    currentOpacity = 0f;
-    final float targetOpacity = 1.0f - (config.transparency / 100f);
-    
-    animationTimer = new Timer(15, e -> {
-        currentOpacity = Math.min(1f, currentOpacity + 0.05f);
-        window.setOpacity(currentOpacity * targetOpacity);
-        if (currentOpacity >= 1f) animationTimer.stop();
-    });
-    window.setVisible(true);
-    animationTimer.start();
-}
-
-// Update the startHideAnimation method to dispose the window
-private void startHideAnimation() {
-    if (animationTimer != null && animationTimer.isRunning()) animationTimer.stop();
-    
-    final float targetOpacity = 1.0f - (config.transparency / 100f);
-    
-    animationTimer = new Timer(15, e -> {
-        currentOpacity = Math.max(0f, currentOpacity - 0.08f);
-        window.setOpacity(currentOpacity * targetOpacity);
-        if (currentOpacity <= 0f) {
-            window.setVisible(false);
-            window.dispose(); // Dispose the window to free resources
-            animationTimer.stop();
+        // ── Expand hint (collapsed and has lower data) ────────────────────────
+        if (currentPayload.hasLower() && !isExpanded) {
+            h.append("<div style='color:").append(hex(sepColor))
+             .append("; font-size:").append(smallSize)
+             .append("px; text-align:center; margin-top:5px;'>")
+             .append("&#8230; click to expand")
+             .append("</div>");
         }
-    });
-    animationTimer.start();
-}
 
-    private static String colorToHex(Color color) {
-        return String.format("#%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
+        h.append("</body></html>");
+        return h.toString();
     }
 
-public static class Config {
-    private final String title;
-    private Color backgroundColor = new Color(40, 40, 40, 76);
-    private Color headerBackground = new Color(43, 43, 43);
-    private Color headerTextColor = Color.WHITE;
-    private Color textColor = new Color(189, 189, 189);
-    private Color highlightColor = Color.WHITE;
-    private Color trendColor = new Color(158, 158, 158);
-    private Color rowBackground = new Color(255, 255, 255, 25);
-    private int width = 160;
-    private int maxBeforeClick = 2;
-    private int maxAfterClick = 6;
-    private int paddingTop = 8;
-    private int paddingBottom = 8;
-    private int paddingLeft = 12;
-    private int paddingRight = 12;
-    private int cornerRadius = 8;
-    private int trendIconSize = 12;
-    private int offsetX = 5;
-    private int offsetY = 0;
-    private int transparency = 0;
-    private Font font = new Font("Segoe UI", Font.PLAIN, 12);
+    /**
+     * Appends a single data row to the HTML StringBuilder.
+     *
+     * Row layout (3-column table row):
+     * <pre>
+     * | dot (10px) | label (grow) | value (right) |
+     * </pre>
+     *
+     * The trend icon (▲/▼/✓/⚠) is rendered inline before the dot when present.
+     */
+    private void appendRow(StringBuilder h, DolatipEntry e,
+                            Color rowColor, int fontSize, boolean bold) {
+        String dotHex    = hex(e.dotColor);
+        String colorHex  = hex(rowColor);
+        String valueStyle = bold
+                ? "font-weight:bold; font-size:" + fontSize + "px; color:" + colorHex + ";"
+                : "font-size:" + fontSize + "px; color:" + colorHex + ";";
+        String labelStyle = "font-size:" + (fontSize - 1) + "px; color:" + colorHex + ";";
 
-    public Config(String title) {
-        this.title = title;
+        h.append("<tr>");
+
+        // Dot cell
+        h.append("<td width='16' valign='middle' align='center'>")
+         .append("<font color='").append(dotHex).append("' style='font-size:9px;'>&#9679;</font>")
+         .append("</td>");
+
+        // Label cell (with optional trend icon prefix)
+        h.append("<td valign='middle'>");
+        if (e.hasTrendIcon()) {
+            String iconColor = trendIconColor(e.trend);
+            h.append("<font color='").append(iconColor)
+             .append("' style='font-size:9px;'>").append(e.trendSymbol())
+             .append("</font>&nbsp;");
+        }
+        if (!e.label.isEmpty()) {
+            h.append("<font style='").append(labelStyle).append("'>")
+             .append(e.label).append("</font>");
+        }
+        h.append("</td>");
+
+        // Value cell
+        h.append("<td align='right' valign='middle'>")
+         .append("<font style='").append(valueStyle).append("'>")
+         .append(e.value)
+         .append("</font></td>");
+
+        h.append("</tr>");
     }
 
-    public Config transparency(int percent) {
-        this.transparency = Math.max(0, Math.min(100, percent));
-        return this;
-    }
+    // ── Animation ─────────────────────────────────────────────────────────────
 
-    public Config backgroundColor(Color color) { this.backgroundColor = color; return this; }
-    public Config headerBackground(Color color) { this.headerBackground = color; return this; }
-    public Config headerTextColor(Color color) { this.headerTextColor = color; return this; }
-    public Config textColor(Color color) { this.textColor = color; return this; }
-    public Config highlightColor(Color color) { this.highlightColor = color; return this; }
-    public Config trendColor(Color color) { this.trendColor = color; return this; }
-    public Config rowBackground(Color color) { this.rowBackground = color; return this; }
-    public Config width(int width) { this.width = width; return this; }
-    public Config maxBeforeClick(int max) { this.maxBeforeClick = max; return this; }
-    public Config maxAfterClick(int max) { this.maxAfterClick = max; return this; }
-    public Config padding(int top, int right, int bottom, int left) {
-        this.paddingTop = top;
-        this.paddingRight = right;
-        this.paddingBottom = bottom;
-        this.paddingLeft = left;
-        return this;
-    }
-    public Config cornerRadius(int radius) { this.cornerRadius = radius; return this; }
-    public Config trendIconSize(int size) { this.trendIconSize = size; return this; }
-    public Config offset(int x, int y) { this.offsetX = x; this.offsetY = y; return this; }
-    public Config font(Font font) { this.font = font; return this; }
-}
-
-private static class DolatipMouseAdapter extends MouseAdapter {
-
-   private final Dolatip tooltip;
-    private final List<Double> data;
-    private Timer clickTimer;
-    public DolatipMouseAdapter(Dolatip tooltip, List<Double> data) {
-        this.tooltip = tooltip;
-        this.data = data;
-    }
-
-    @Override
-public void mouseEntered(MouseEvent e) {
-    Component parent = SwingUtilities.getRootPane((Component) e.getSource());
-    if (parent != null) {
-        tooltip.window.setLocationRelativeTo(parent);
-    }
-    tooltip.show((Component) e.getSource(), data);
-}
-
-    @Override
-    public void mouseExited(MouseEvent e) {
-        tooltip.hide();
-    }
-
-    @Override
-    public void mouseClicked(MouseEvent e) {
-        if (clickTimer != null && clickTimer.isRunning()) return;
-        
-        clickTimer = new Timer(300, evt -> {
-            tooltip.toggleExpanded();
-            clickTimer.stop();
+    private void startShowAnimation() {
+        stopAnimation();
+        currentOpacity = 0f;
+        float target   = targetOpacity();
+        animationTimer = new Timer(15, e -> {
+            currentOpacity = Math.min(1f, currentOpacity + 0.12f);
+            window.setOpacity(currentOpacity * target);
+            if (currentOpacity >= 1f) animationTimer.stop();
         });
-        clickTimer.setRepeats(false);
-        clickTimer.start();
+        window.setVisible(true);
+        animationTimer.start();
     }
-}
+
+    private void startHideAnimation() {
+        stopAnimation();
+        float target = targetOpacity();
+        animationTimer = new Timer(15, e -> {
+            currentOpacity = Math.max(0f, currentOpacity - 0.18f);
+            window.setOpacity(currentOpacity * target);
+            if (currentOpacity <= 0f) {
+                window.setVisible(false);
+                isExpanded = false;
+                animationTimer.stop();
+            }
+        });
+        animationTimer.start();
+    }
+
+    private void animateWindowResize(Dimension from, Dimension to) {
+        final long      start     = System.currentTimeMillis();
+        final int       duration  = 180;
+        final Dimension startSize = new Dimension(from);
+        final Dimension endSize   = new Dimension(to);
+        new Timer(16, e -> {
+            float p = (System.currentTimeMillis() - start) / (float) duration;
+            if (p >= 1f) {
+                window.setSize(endSize);
+                positionWindow();
+                ((Timer) e.getSource()).stop();
+            } else {
+                // Ease-out quad
+                p = 1f - (1f - p) * (1f - p);
+                window.setSize(
+                        (int) (startSize.width  + (endSize.width  - startSize.width)  * p),
+                        (int) (startSize.height + (endSize.height - startSize.height) * p)
+                );
+                positionWindow();
+            }
+        }).start();
+    }
+
+    private void stopAnimation() {
+        if (animationTimer != null && animationTimer.isRunning()) animationTimer.stop();
+    }
+
+    private float targetOpacity() {
+        return 1.0f - (config.transparency / 100f);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static String hex(Color c) {
+        if (c == null) return "#888888";
+        return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
+    }
+
+    private static Color uiColor(String key, Color fallback) {
+        Color c = UIManager.getColor(key);
+        return c != null ? c : fallback;
+    }
+
+    private static String trendIconColor(DolatipEntry.Trend t) {
+        return switch (t) {
+            case UP, OK   -> "#4CAF50";
+            case DOWN     -> "#F44336";
+            case WARN     -> "#FF9800";
+            case ERROR    -> "#F44336";
+            case INFO     -> "#2196F3";
+            default       -> "#9E9E9E";
+        };
+    }
+
+    private Color resolvedBg()       { return config.backgroundColor; }
+    private Color resolvedHeaderBg() { return config.headerBackground; }
+    private Color resolvedHeaderFg() { return config.headerTextColor;  }
+
+    private static void removeExistingListeners(JComponent c) {
+        for (MouseListener l : c.getMouseListeners()) {
+            if (l instanceof DolatipMouseAdapter) c.removeMouseListener(l);
+        }
+    }
+
+    // ── Config ────────────────────────────────────────────────────────────────
+
+    /**
+     * Fluent configuration for a Dolatip tooltip instance.
+     *
+     * Start from a {@link DolatipUsage} preset for sensible defaults:
+     * <pre>
+     * Dolatip.Config cfg = DolatipUsage.FINANCIAL.toConfig("Price History")
+     *     .maxAfterClick(10)
+     *     .offset(12, -4);
+     * </pre>
+     */
+    public static final class Config {
+
+        static final int DEFAULT_WIDTH = 180;
+
+        final String title;
+        Color  backgroundColor = new Color(40, 40, 40, 200);
+        Color  headerBackground = new Color(50, 50, 50);
+        Color  headerTextColor  = Color.WHITE;
+        Color  textColor        = new Color(200, 200, 200);
+        Color  highlightColor   = Color.WHITE;
+        int    width            = DEFAULT_WIDTH;
+        int    maxBeforeClick   = 2;
+        int    maxAfterClick    = 8;
+        int    cornerRadius     = 12;
+        int    offsetX          = 10;
+        int    offsetY          = 0;
+        int    transparency     = 0;
+
+        public Config(String title) { this.title = title; }
+
+        public Config transparency(int p)         { this.transparency     = p;      return this; }
+        public Config width(int w)                { this.width            = w;      return this; }
+        public Config maxBeforeClick(int m)       { this.maxBeforeClick   = m;      return this; }
+        public Config maxAfterClick(int m)        { this.maxAfterClick    = m;      return this; }
+        public Config offset(int x, int y)        { this.offsetX = x; this.offsetY = y; return this; }
+        public Config backgroundColor(Color c)    { this.backgroundColor  = c;      return this; }
+        public Config textColor(Color c)          { this.textColor        = c;      return this; }
+        public Config highlightColor(Color c)     { this.highlightColor   = c;      return this; }
+        public Config headerBackground(Color c)   { this.headerBackground = c;      return this; }
+        public Config headerTextColor(Color c)    { this.headerTextColor  = c;      return this; }
+        public Config cornerRadius(int r)         { this.cornerRadius     = r;      return this; }
+        public Config font(Font font)             { return this; } // reserved for future
+    }
+
+    // ── Mouse adapters ────────────────────────────────────────────────────────
+
+    private static final class DolatipMouseAdapter extends MouseAdapter {
+        private final DolatipPayload payload;
+        private final Config         config;
+
+        DolatipMouseAdapter(DolatipPayload payload, Config config) {
+            this.payload = payload;
+            this.config  = config;
+        }
+
+        @Override public void mouseEntered(MouseEvent e) {
+            Dolatip.getInstance(config).show((Component) e.getSource(), payload);
+        }
+
+        @Override public void mouseExited(MouseEvent e) {
+            Dolatip.getInstance(config).hide();
+        }
+    }
+
+    private static final class ContentMouseAdapter extends MouseAdapter {
+        private final Dolatip owner;
+
+        ContentMouseAdapter(Dolatip owner) { this.owner = owner; }
+
+        @Override public void mouseEntered(MouseEvent e) {
+            // Keep card fully opaque while the cursor is on it
+            owner.window.setOpacity(owner.targetOpacity());
+        }
+
+        @Override public void mouseExited(MouseEvent e) {
+            owner.hide();
+        }
+
+        @Override public void mouseClicked(MouseEvent e) {
+            owner.toggleExpanded();
+        }
+    }
 }
